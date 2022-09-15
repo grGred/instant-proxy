@@ -1,0 +1,9 @@
+.env
+typechain-types
+typechain
+artifacts
+cache
+node_modules
+.idea
+.openzeppelin
+.DS_Store
