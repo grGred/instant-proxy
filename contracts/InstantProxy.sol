@@ -22,6 +22,7 @@ import 'rubic-bridge-base/contracts/libraries/SmartApprove.sol';
 import '@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol';
 
 error DexNotAvailable();
+error AmntReceivedSubAmntExpected(uint256 amountReceived, uint256 amountExpected);
 
 /**
     @title InstantProxy
@@ -53,6 +54,10 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         if (!availableDex.contains(_dex)) {
             revert DexNotAvailable();
         }
+        if (_tokenIn != address(0)){
+            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn); 
+            SmartApprove.smartApprove(_tokenIn, _amountIn, _dex);
+        }
 
         AddressUpgradeable.functionCallWithValue(_dex, _data, msg.value);
 
@@ -70,6 +75,10 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         if (!availableDex.contains(_dex)) {
             revert DexNotAvailable();
         }
+        if (_tokenIn != address(0)){
+            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn); 
+            SmartApprove.smartApprove(_tokenIn, _amountIn, _dex);
+        }
 
         uint256 balanceBefore = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
 
@@ -78,6 +87,43 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         sendToken(_tokenOut, IERC20Upgradeable(_tokenOut).balanceOf(address(this)) - balanceBefore, _receiver);
 
         emit DexSwap(_dex, _receiver, _tokenIn, _amountIn, _tokenOut);
+    }
+
+    function simulateTransfer(address _tokenIn, uint256 _amountIn) external {
+        uint256 balanceBefore = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
+        IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn);
+        revert AmntReceivedSubAmntExpected(
+            IERC20Upgradeable(_tokenIn).balanceOf(address(this)) - balanceBefore,
+            _amountIn
+        );
+    }
+
+    function simulateSwap(
+        address _dex,
+        address _tokenIn,
+        uint256 _amountIn,
+        address _tokenOut,
+        bytes calldata _data
+    ) external payable {
+        if (_tokenIn != address(0)){
+            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn); 
+            SmartApprove.smartApprove(_tokenIn, _amountIn, _dex);
+        }
+        // execute swap
+        AddressUpgradeable.functionCallWithValue(_dex, _data, msg.value);
+        
+        uint256 tokenAmntAfterSwap = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
+        uint256 balanceBefore = IERC20Upgradeable(_tokenOut).balanceOf(msg.sender);
+
+        IERC20Upgradeable(_tokenOut).transfer(msg.sender, tokenAmntAfterSwap);
+        revert AmntReceivedSubAmntExpected(
+            IERC20Upgradeable(_tokenOut).balanceOf(msg.sender) - balanceBefore,
+            balanceBefore
+        );
+    }
+
+    function decreaseAllowance(address _token, uint256 _amount) external onlyOwner {
+        // sendToken(_token, _amount, msg.sender);
     }
 
     function sweepTokens(address _token, uint256 _amount) external onlyOwner {
