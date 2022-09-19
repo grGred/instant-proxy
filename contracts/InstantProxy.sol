@@ -38,10 +38,21 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
 
     event DexSwap(address dex, address receiver, address inputToken, uint256 inputAmount, address outputToken);
 
-    function initialize() external initializer {
+    function initialize(address[] memory _routers) external initializer {
         __Pausable_init();
         __Ownable_init();
         __ReentrancyGuard_init();
+
+        uint256 routerLength = _routers.length;
+        for (uint256 i; i < routerLength; ) {
+            if (_routers[i] == address(0)) {
+                revert ZeroAddress();
+            }
+            availableDex.add(_routers[i]);
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     function dexCall(
@@ -54,11 +65,12 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         if (!availableDex.contains(_dex)) {
             revert DexNotAvailable();
         }
-        if (_tokenIn != address(0)){
-            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn); 
+        if (_tokenIn != address(0)) {
+            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn);
             SmartApprove.smartApprove(_tokenIn, _amountIn, _dex);
         }
 
+        // perform swap directly to user
         AddressUpgradeable.functionCallWithValue(_dex, _data, msg.value);
 
         emit DexSwap(_dex, msg.sender, _tokenIn, _amountIn, _tokenOut);
@@ -75,13 +87,14 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         if (!availableDex.contains(_dex)) {
             revert DexNotAvailable();
         }
-        if (_tokenIn != address(0)){
-            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn); 
+        if (_tokenIn != address(0)) {
+            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn);
             SmartApprove.smartApprove(_tokenIn, _amountIn, _dex);
         }
 
         uint256 balanceBefore = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
 
+        // perform swap to contract
         AddressUpgradeable.functionCallWithValue(_dex, _data, msg.value);
 
         sendToken(_tokenOut, IERC20Upgradeable(_tokenOut).balanceOf(address(this)) - balanceBefore, _receiver);
@@ -89,6 +102,11 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         emit DexSwap(_dex, _receiver, _tokenIn, _amountIn, _tokenOut);
     }
 
+    /**
+     * @dev Log the difference of token recieved after _transfer to contract
+     * @param _tokenIn Token sent
+     * @param _amountIn Amount sent
+     */
     function simulateTransfer(address _tokenIn, uint256 _amountIn) external {
         uint256 balanceBefore = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
         IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn);
@@ -98,6 +116,15 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         );
     }
 
+    /**
+     * @dev Log the difference of token recieved after _transfer to msg.sender
+     * @notice Use this function in case you don't know which address owns the token
+     * @param _dex Dex address performing swap logic
+     * @param _tokenIn Token sent
+     * @param _amountIn Amount sent
+     * @param _tokenOut token received
+     * @param _data Data with swap logic
+     */
     function simulateSwap(
         address _dex,
         address _tokenIn,
@@ -105,13 +132,13 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         address _tokenOut,
         bytes calldata _data
     ) external payable {
-        if (_tokenIn != address(0)){
-            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn); 
+        if (_tokenIn != address(0)) {
+            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn);
             SmartApprove.smartApprove(_tokenIn, _amountIn, _dex);
         }
         // execute swap
         AddressUpgradeable.functionCallWithValue(_dex, _data, msg.value);
-        
+
         uint256 tokenAmntAfterSwap = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
         uint256 balanceBefore = IERC20Upgradeable(_tokenOut).balanceOf(msg.sender);
 
@@ -122,8 +149,13 @@ contract InsantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuard
         );
     }
 
-    function decreaseAllowance(address _token, uint256 _amount) external onlyOwner {
-        // sendToken(_token, _amount, msg.sender);
+    function decreaseAllowance(
+        address _router,
+        address _token,
+        uint256 _amount
+    ) external onlyOwner {
+        uint256 allowance = IERC20Upgradeable(_token).allowance(msg.sender, _token);
+        IERC20Upgradeable(_token).approve(_router, allowance - _amount);
     }
 
     function sweepTokens(address _token, uint256 _amount) external onlyOwner {
