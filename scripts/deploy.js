@@ -11,7 +11,8 @@ async function main() {
   //     '0x89D6B81A1Ef25894620D05ba843d83B0A296239e',
   //     '0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff'
   //   ]
-  // ]);
+  // ], ,
+  // { initializer: 'initialize' });
 
   // await deployInsantProxy.deployed();
 

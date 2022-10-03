@@ -18,7 +18,7 @@ const DEFAULT_COMPILER_SETTINGS: SolcUserConfig = {
   settings: {
     optimizer: {
       enabled: true,
-      runs: 1000,
+      runs: 10000,
     },
     metadata: {
       bytecodeHash: 'none',
@@ -30,10 +30,10 @@ const DEFAULT_COMPILER_SETTINGS: SolcUserConfig = {
 module.exports = {
   networks: {
     hardhat: {
-      // chainId: 137,
+      chainId: 137,
       // forking: {
       //   url: `https://polygon-rpc.com`,
-      //   blockNumber: 27081600 // hardcode block number to increase performance of the local cache
+      //   blockNumber: 33711436 // hardcode block number to increase performance of the local cache
       // },
       allowUnlimitedContractSize: true,
       loggingEnabled: false,
