@@ -22,6 +22,7 @@ import 'rubic-bridge-base/contracts/BridgeBase.sol';
 error DexNotAvailable();
 error FeesEnabled();
 error DifferentAmountSpent();
+error NativeNotSupported();
 
 /**
     @title InstantProxy
@@ -31,8 +32,6 @@ error DifferentAmountSpent();
 contract InstantProxy is BridgeBase {
     using EnumerableSetUpgradeable for EnumerableSetUpgradeable.AddressSet;
     using SafeERC20Upgradeable for IERC20Upgradeable;
-
-    bool public feesEnabled;
 
     modifier onlyWithoutFees() {
         checkFees();
@@ -65,36 +64,27 @@ contract InstantProxy is BridgeBase {
         address _tokenIn,
         uint256 _amountIn,
         address _tokenOut,
+        address _recipient,
         bytes calldata _data
-    ) external payable nonReentrant whenNotPaused onlyWithoutFees {
+    ) external nonReentrant whenNotPaused onlyWithoutFees {
         if (!availableRouters.contains(_dex)) {
             revert DexNotAvailable();
         }
-        if (_tokenIn != address(0) && msg.value == 0) {
-            uint256 balanceBeforeTransfer = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
-            IERC20Upgradeable(_tokenIn).safeTransferFrom(msg.sender, address(this), _amountIn);
-            SafeERC20Upgradeable.safeIncreaseAllowance(
-                IERC20Upgradeable(_tokenIn),
-                _dex,
-                IERC20Upgradeable(_tokenIn).balanceOf(address(this)) - balanceBeforeTransfer
-            );
+
+        uint256 tokenInAfter;
+        (_amountIn, tokenInAfter) = _checkAmountIn(_tokenIn, _amountIn);
+
+        SafeERC20Upgradeable.safeIncreaseAllowance(IERC20Upgradeable(_tokenIn), _dex, _amountIn);
+
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(_tokenOut, _dex, _data, 0);
+
+        if (tokenInAfter - IERC20Upgradeable(_tokenIn).balanceOf(address(this)) != _amountIn) {
+            revert DifferentAmountSpent();
         }
 
-        uint256 balanceBeforeSwap;
-        _tokenOut == address(0)
-            ? balanceBeforeSwap = address(this).balance
-            : IERC20Upgradeable(_tokenOut).balanceOf(address(this));
-
-        // perform swap directly to user
-        AddressUpgradeable.functionCallWithValue(_dex, _data, msg.value);
-
-        uint256 balanceAfterSwap;
-        _tokenOut == address(0)
-            ? balanceBeforeSwap = address(this).balance
-            : IERC20Upgradeable(_tokenOut).balanceOf(address(this));
-
-        if (balanceAfterSwap != balanceBeforeSwap) {
-            sendToken(_tokenOut, balanceAfterSwap - balanceBeforeSwap, msg.sender);
+        // send tokens to user in case router doesn't support receiver address
+        if (tokenOutBefore != tokenOutAfter) {
+            sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
         }
 
         // reset allowance back to zero, just in case
@@ -102,7 +92,36 @@ contract InstantProxy is BridgeBase {
             IERC20Upgradeable(_tokenIn).safeApprove(_dex, 0);
         }
 
-        emit DexSwap(_dex, msg.sender, _tokenIn, _amountIn, _tokenOut);
+        emit DexSwap(_dex, _recipient, _tokenIn, _amountIn, _tokenOut);
+    }
+
+    function dexCallNative(
+        address _dex,
+        address _tokenIn,
+        uint256 _amountIn,
+        address _tokenOut,
+        address _recipient,
+        bytes calldata _data
+    ) external payable nonReentrant whenNotPaused onlyWithoutFees {
+        if (!availableRouters.contains(_dex)) {
+            revert DexNotAvailable();
+        }
+
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(
+            _tokenOut,
+            _dex,
+            _data,
+            msg.value
+        );
+
+        // no need to check for different amount spent since we called router with all value
+        
+        // send tokens to user in case router doesn't support receiver address
+        if (tokenOutAfter != tokenOutBefore) {
+            sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
+        }
+
+        emit DexSwap(_dex, _recipient, _tokenIn, _amountIn, _tokenOut);
     }
 
     function dexCallWithFee(
@@ -110,6 +129,7 @@ contract InstantProxy is BridgeBase {
         address _tokenIn,
         uint256 _amountIn,
         address _tokenOut,
+        address _recipient,
         address _integrator,
         bytes calldata _data
     ) external payable nonReentrant whenNotPaused {
@@ -118,50 +138,27 @@ contract InstantProxy is BridgeBase {
         }
         IntegratorFeeInfo memory _info = integratorToFeeInfo[_integrator];
 
-        uint256 balanceAfterTransfer;
-        if (_tokenIn != address(0)) {
-            uint256 balanceBeforeTransfer = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
-            IERC20Upgradeable(_tokenIn).safeTransferFrom(msg.sender, address(this), _amountIn);
-            balanceAfterTransfer = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
+        uint256 tokenInAfter;
+        (_amountIn, tokenInAfter) = _checkAmountIn(_tokenIn, _amountIn);
 
-            _amountIn = accrueTokenFees(
-                _integrator,
-                _info,
-                balanceAfterTransfer - balanceBeforeTransfer,
-                0,
-                _integrator
-            );
-            
-            SafeERC20Upgradeable.safeIncreaseAllowance(
-                IERC20Upgradeable(_tokenIn),
-                _dex,
-                _amountIn
-            );
+        _amountIn = accrueTokenFees(_integrator, _info, _amountIn, 0, _integrator);
+
+        // approve for received amountIn - fees
+        SafeERC20Upgradeable.safeIncreaseAllowance(IERC20Upgradeable(_tokenIn), _dex, _amountIn);
+
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(
+            _tokenOut,
+            _dex,
+            _data,
+            accrueFixedCryptoFee(_integrator, _info)
+        );
+
+        if (tokenInAfter - IERC20Upgradeable(_tokenIn).balanceOf(address(this)) != _amountIn) {
+            revert DifferentAmountSpent();
         }
 
-        uint256 balanceBeforeSwap;
-        _tokenOut == address(0)
-            ? balanceBeforeSwap = address(this).balance
-            : IERC20Upgradeable(_tokenOut).balanceOf(address(this));
-
-        // perform swap directly to user
-        AddressUpgradeable.functionCallWithValue(_dex, _data, accrueFixedCryptoFee(_integrator, _info));
-
-        if (_tokenIn != address(0)) {
-            if (balanceAfterTransfer - IERC20Upgradeable(_tokenIn).balanceOf(address(this)) != _amountIn) {
-                revert DifferentAmountSpent();
-            }
-        }
-
-        uint256 balanceAfterSwap;
-        if (_tokenOut == address(0)) {
-            balanceAfterSwap = address(this).balance;
-        } else {
-            balanceAfterSwap = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
-        }
-
-        if (balanceAfterSwap != balanceBeforeSwap) {
-            sendToken(_tokenOut, balanceAfterSwap - balanceBeforeSwap, msg.sender);
+        if (tokenOutAfter != tokenOutBefore) {
+            sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
         }
 
         // reset allowance back to zero, just in case
@@ -169,7 +166,63 @@ contract InstantProxy is BridgeBase {
             IERC20Upgradeable(_tokenIn).safeApprove(_dex, 0);
         }
 
-        emit DexSwap(_dex, msg.sender, _tokenIn, _amountIn, _tokenOut);
+        emit DexSwap(_dex, _recipient, _tokenIn, _amountIn, _tokenOut);
+    }
+
+    function dexCallNativeWithFee(
+        address _dex,
+        address _tokenIn,
+        uint256 _amountIn,
+        address _tokenOut,
+        address _recipient,
+        address _integrator,
+        bytes calldata _data
+    ) external payable nonReentrant whenNotPaused {
+        if (!availableRouters.contains(_dex)) {
+            revert DexNotAvailable();
+        }
+        IntegratorFeeInfo memory _info = integratorToFeeInfo[_integrator];
+
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(
+            _tokenOut,
+            _dex,
+            _data,
+            accrueFixedCryptoFee(_integrator, _info)
+        );
+
+        // no need to check for different amount spent since we called router with all value
+
+        // send tokens to user in case router doesn't support receiver address
+        if (tokenOutAfter != tokenOutBefore) {
+            sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
+        }
+
+        emit DexSwap(_dex, _recipient, _tokenIn, _amountIn, _tokenOut);
+    }
+
+    function _checkAmountIn(address _tokenIn, uint256 _amountIn) internal returns (uint256, uint256) {
+        uint256 balanceBeforeTransfer = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
+        IERC20Upgradeable(_tokenIn).safeTransferFrom(msg.sender, address(this), _amountIn);
+        uint256 balanceAfterTransfer = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
+        _amountIn = balanceAfterTransfer - balanceBeforeTransfer;
+        return (_amountIn, balanceAfterTransfer);
+    }
+
+    function _performCallAndChecks(
+        address _tokenOut,
+        address _dex,
+        bytes calldata _data,
+        uint256 _value
+    ) internal returns (uint256 balanceBeforeSwap, uint256 balanceAfterSwap) {
+        _tokenOut == address(0)
+            ? balanceBeforeSwap = address(this).balance
+            : balanceBeforeSwap = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
+
+        AddressUpgradeable.functionCallWithValue(_dex, _data, _value);
+
+        _tokenOut == address(0)
+            ? balanceAfterSwap = address(this).balance
+            : balanceAfterSwap = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
     }
 
     function sweepTokens(address _token, uint256 _amount) external onlyAdmin {
