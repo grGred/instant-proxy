@@ -106,15 +106,10 @@ contract InstantProxy is BridgeBase {
             revert DexNotAvailable();
         }
 
-        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(
-            _tokenOut,
-            _dex,
-            _data,
-            msg.value
-        );
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(_tokenOut, _dex, _data, msg.value);
 
         // no need to check for different amount spent since we called router with all value
-        
+
         // send tokens to user in case router doesn't support receiver address
         if (tokenOutAfter != tokenOutBefore) {
             sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
@@ -213,15 +208,15 @@ contract InstantProxy is BridgeBase {
         bytes calldata _data,
         uint256 _value
     ) internal returns (uint256 balanceBeforeSwap, uint256 balanceAfterSwap) {
-        _tokenOut == address(0)
-            ? balanceBeforeSwap = address(this).balance
-            : balanceBeforeSwap = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
+        _tokenOut == address(0) ? balanceBeforeSwap = address(this).balance : balanceBeforeSwap = IERC20Upgradeable(
+            _tokenOut
+        ).balanceOf(address(this));
 
         AddressUpgradeable.functionCallWithValue(_dex, _data, _value);
 
-        _tokenOut == address(0)
-            ? balanceAfterSwap = address(this).balance
-            : balanceAfterSwap = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
+        _tokenOut == address(0) ? balanceAfterSwap = address(this).balance : balanceAfterSwap = IERC20Upgradeable(
+            _tokenOut
+        ).balanceOf(address(this));
     }
 
     function sweepTokens(address _token, uint256 _amount) external onlyAdmin {
