@@ -22,7 +22,6 @@ import 'rubic-bridge-base/contracts/BridgeBase.sol';
 error DexNotAvailable();
 error FeesEnabled();
 error DifferentAmountSpent();
-error NativeNotSupported();
 
 /**
     @title InstantProxy
