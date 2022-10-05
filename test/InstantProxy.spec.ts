@@ -35,56 +35,71 @@ describe('Instant Proxy Tests', () => {
         } = {},
         value?: BN
     ): Promise<ContractTransaction> {
+        // call with tokens
         if (value === undefined) {
-            // call with tokens
-            value = (
-                await calcCryptoFees({
-                    proxy,
-                    integrator: integrator === ethers.constants.AddressZero ? undefined : integrator
-                })
-            ).totalCryptoFee;
             if (withFee === false) {
-                return proxy.routerCall(
-                    consts.DEFAULT_MESSAGE,
-                    {
-                        srcInputToken,
-                        srcInputAmount,
-                        dstOutputToken,
-                        recipient,
-                        router
-                    },
+                return proxy.dexCall(
+                    router,
+                    srcInputToken,
+                    srcInputAmount,
+                    dstOutputToken,
+                    recipient,
+                    data
+                );
+            } else {
+                value = (
+                    await calcCryptoFees({
+                        proxy,
+                        integrator:
+                            integrator === ethers.constants.AddressZero ? undefined : integrator
+                    })
+                ).totalCryptoFee;
+                return proxy.dexCallWithFee(
+                    router,
+                    srcInputToken,
+                    srcInputAmount,
+                    dstOutputToken,
+                    recipient,
+                    integrator,
                     data,
                     { value: value }
                 );
             }
         }
-
-        value = (
-            await calcCryptoFees({
-                bridge,
-                integrator: integrator === ethers.constants.AddressZero ? undefined : integrator
-            })
-        ).totalCryptoFee.add(srcInputAmount);
-        return bridge.routerCallNative(
-            consts.DEFAULT_MESSAGE,
-            {
+        // Native call
+        if (withFee === false) {
+            return proxy.dexCallNative(
+                router,
                 srcInputToken,
-                dstOutputToken,
-                integrator,
-                recipient,
                 srcInputAmount,
-                dstMinOutputAmount,
-                dstChainID,
-                router
-            },
-            data,
-            { value: value }
-        );
+                dstOutputToken,
+                recipient,
+                data,
+                { value }
+            );
+        } else {
+            value = (
+                await calcCryptoFees({
+                    proxy,
+                    integrator: integrator === ethers.constants.AddressZero ? undefined : integrator
+                })
+            ).totalCryptoFee.add(srcInputAmount);
+            return proxy.dexCallNativeWithFee(
+                router,
+                srcInputToken,
+                srcInputAmount,
+                dstOutputToken,
+                recipient,
+                integrator,
+                data,
+                { value: value }
+            );
+        }
     }
 
     before('create fixture loader', async () => {
-        [wallet, other] = await (ethers as any).getSigners();
-        loadFixture = createFixtureLoader([wallet, other]);
+        [wallet, swapper] = await (ethers as any).getSigners();
+        loadFixture = createFixtureLoader([wallet, swapper]);
     });
 
     beforeEach('deploy fixture', async () => {
@@ -93,31 +108,16 @@ describe('Instant Proxy Tests', () => {
         ));
     });
 
-    describe('#Tests', () => {
-        describe('#funcName', () => {
-            it('Should do smth', async () => {
-                // console.log(await proxy.simulateTransfer("0x8f18dc399594b451eda8c5da02d0563c0b2d0f16", 10000));
-                // const abi = [
-                //     'AmntReceivedSubAmntExpected(uint256 amountReceived, uint256 amountExpected)'
-                // ];
-                // // const abi = ['function InsufficientBalance(uint256 available, uint256 required)'];
+    describe('Test call to routers', () => {
+        describe('Calls without fees', () => {
+            beforeEach('set approvals', async () => {
+                proxy = proxy.connect(wallet);
+                await transitToken.approve(proxy.address, ethers.constants.MaxUint256);
+                await swapToken.approve(proxy.address, ethers.constants.MaxUint256);
+            });
 
-                // const interface1 = new ethers.utils.Interface(abi);
-                // const error_data =
-                //     '0x79235e56000000000000000000000000000000000000' +
-                //     '0000000000000000000000000100000000000000000000' +
-                //     '0000000000000000000000000000000000000100000000';
-
-                // const decoded = interface1.decodeFunctionData(
-                //     interface1.functions['AmntReceivedSubAmntExpected(uint256,uint256)'],
-                //     error_data
-                // );
-                console.log('1');
-                // console.log(
-                //     'Insufficient balance for transfer. ' +
-                //         `Needed ${decoded.required.toString()} but only ` +
-                //         `${decoded.available.toString()} available.`
-                // );
+            it('Should execute a swap with tokens without fee', async () => {
+                callDex();
             });
         });
     });

@@ -41,7 +41,9 @@ export const deployContractFixture: Fixture<DeployContractFixture> = async funct
         [MAX_TOKEN_AMOUNT, MAX_TOKEN_AMOUNT]
     ])) as InstantProxy;
 
-    expect(await swapToken.balanceOf(wallets[0].address)).to.eq(ethers.utils.parseEther('100000000000'));
+    expect(await swapToken.balanceOf(wallets[0].address)).to.eq(
+        ethers.utils.parseEther('100000000000')
+    );
     expect(await transitToken.balanceOf(wallets[0].address)).to.eq(
         ethers.utils.parseEther('100000000000')
     );
