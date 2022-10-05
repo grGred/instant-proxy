@@ -54,7 +54,7 @@ contract InstantProxy is BridgeBase {
         address[] memory _tokens,
         uint256[] memory _minTokenAmounts,
         uint256[] memory _maxTokenAmounts
-    ) internal initializer {
+    ) external initializer {
         __BridgeBaseInit(0, 0, _routers, _tokens, _minTokenAmounts, _maxTokenAmounts);
     }
 
