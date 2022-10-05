@@ -12,6 +12,7 @@ interface DeployContractFixture {
     swapToken: TestERC20;
     transitToken: TestERC20;
     wnative: WETH9;
+    DEX: TestDex;
 }
 
 export const deployContractFixture: Fixture<DeployContractFixture> = async function (
@@ -40,26 +41,6 @@ export const deployContractFixture: Fixture<DeployContractFixture> = async funct
         [MAX_TOKEN_AMOUNT, MAX_TOKEN_AMOUNT]
     ])) as InstantProxy;
 
-    // // part for seting storage
-    // const abiCoder = ethers.utils.defaultAbiCoder;
-
-    // const storageBalancePositionSwap = ethers.utils.keccak256(
-    //     abiCoder.encode(['address'], [wallets[0].address]) +
-    //         abiCoder.encode(['uint256'], [0]).slice(2, 66)
-    // );
-
-    // await network.provider.send('hardhat_setStorageAt', [
-    //     swapToken.address,
-    //     storageBalancePositionSwap,
-    //     abiCoder.encode(['uint256'], [ethers.utils.parseEther('100000')])
-    // ]);
-
-    // await network.provider.send('hardhat_setStorageAt', [
-    //     transitToken.address,
-    //     storageBalancePositionSwap,
-    //     abiCoder.encode(['uint256'], [ethers.utils.parseEther('100000')])
-    // ]);
-
     expect(await swapToken.balanceOf(wallets[0].address)).to.eq(ethers.utils.parseEther('100000000000'));
     expect(await transitToken.balanceOf(wallets[0].address)).to.eq(
         ethers.utils.parseEther('100000000000')
@@ -77,6 +58,7 @@ export const deployContractFixture: Fixture<DeployContractFixture> = async funct
         proxy,
         swapToken,
         transitToken,
-        wnative
+        wnative,
+        DEX
     };
 };

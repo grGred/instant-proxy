@@ -1,14 +1,13 @@
-import { OnlySourceFunctionality } from '../../typechain';
-import { BigNumber, BigNumberish, BytesLike } from 'ethers';
-import { ethers } from 'hardhat';
+import { InstantProxy } from '../../typechain';
+import { BigNumber } from 'ethers';
 import { DENOMINATOR } from './consts';
 
 export async function calcTokenFees({
-    bridge,
+    proxy,
     amountWithFee,
     integrator
 }: {
-    bridge: OnlySourceFunctionality;
+    proxy: InstantProxy;
     amountWithFee: BigNumber;
     integrator?: string;
 }): Promise<{
@@ -23,7 +22,7 @@ export async function calcTokenFees({
     let amountWithoutFee;
 
     if (integrator !== undefined) {
-        const feeInfo = await bridge.integratorToFeeInfo(integrator);
+        const feeInfo = await proxy.integratorToFeeInfo(integrator);
         if (feeInfo.isIntegrator) {
             feeAmount = amountWithFee.mul(feeInfo.tokenFee).div(DENOMINATOR);
             RubicFee = feeAmount.mul(feeInfo.RubicTokenShare).div(DENOMINATOR);
@@ -32,14 +31,14 @@ export async function calcTokenFees({
         } else {
             // console.log('WARNING: integrator is not active');
 
-            const fee = await bridge.RubicPlatformFee();
+            const fee = await proxy.RubicPlatformFee();
 
             feeAmount = amountWithFee.mul(fee).div(DENOMINATOR);
             RubicFee = feeAmount;
             amountWithoutFee = amountWithFee.sub(feeAmount);
         }
     } else {
-        const fee = await bridge.RubicPlatformFee();
+        const fee = await proxy.RubicPlatformFee();
 
         feeAmount = amountWithFee.mul(fee).div(DENOMINATOR);
         RubicFee = feeAmount;
@@ -52,13 +51,11 @@ export async function calcTokenFees({
 }
 
 export async function calcCryptoFees({
-    bridge,
-    integrator,
-    dstChainID
+    proxy,
+    integrator
 }: {
-    bridge: OnlySourceFunctionality;
+    proxy: InstantProxy;
     integrator?: string;
-    dstChainID?: BigNumberish;
 }): Promise<{
     totalCryptoFee: BigNumber;
     fixedCryptoFee: BigNumber;
@@ -73,7 +70,7 @@ export async function calcCryptoFees({
     let gasFee;
 
     if (integrator !== undefined) {
-        const feeInfo = await bridge.integratorToFeeInfo(integrator);
+        const feeInfo = await proxy.integratorToFeeInfo(integrator);
         if (feeInfo.isIntegrator) {
             totalCryptoFee = feeInfo.fixedFeeAmount;
             fixedCryptoFee = totalCryptoFee;
@@ -83,12 +80,12 @@ export async function calcCryptoFees({
         } else {
             // console.log('WARNING: integrator is not active');
 
-            totalCryptoFee = await bridge.fixedCryptoFee();
+            totalCryptoFee = await proxy.fixedCryptoFee();
 
             RubicFixedFee = totalCryptoFee;
         }
     } else {
-        totalCryptoFee = await bridge.fixedCryptoFee();
+        totalCryptoFee = await proxy.fixedCryptoFee();
 
         RubicFixedFee = totalCryptoFee;
     }
