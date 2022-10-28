@@ -5,6 +5,7 @@ import '@nomiclabs/hardhat-etherscan';
 import 'hardhat-contract-sizer';
 import 'hardhat-gas-reporter';
 import '@openzeppelin/hardhat-upgrades';
+import 'solidity-coverage'
 
 import { SolcUserConfig } from 'hardhat/types'
 

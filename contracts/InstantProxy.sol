@@ -13,46 +13,49 @@ pragma solidity ^0.8.10;
 
 */
 
-import '@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/utils/structs/EnumerableSetUpgradeable.sol';
-import '@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol';
 import 'rubic-bridge-base/contracts/errors/Errors.sol';
-import '@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol';
-
+import 'rubic-bridge-base/contracts/BridgeBase.sol';
 
 error DexNotAvailable();
+error FeesEnabled();
+error DifferentAmountSpent();
 
 /**
     @title InstantProxy
     @author Vladislav Yaroshuk
     @notice Universal proxy dex aggregator contract by Rubic exchange
  */
-contract InstantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuardUpgradeable {
+contract InstantProxy is BridgeBase {
     using EnumerableSetUpgradeable for EnumerableSetUpgradeable.AddressSet;
     using SafeERC20Upgradeable for IERC20Upgradeable;
 
-    // AddressSet of whitelisted addresses
-    EnumerableSetUpgradeable.AddressSet internal availableDex;
+    modifier onlyWithoutFees() {
+        checkFees();
+        _;
+    }
+
+    /**
+     * @notice Used in modifier
+     * @dev Function to check if the fees are enabled
+     */
+    function checkFees() internal view {
+        if (fixedCryptoFee > 0) {
+            revert FeesEnabled();
+        }
+    }
 
     event DexSwap(address dex, address receiver, address inputToken, uint256 inputAmount, address outputToken);
 
-    function initialize(address[] memory _routers) external initializer {
-        __Pausable_init();
-        __Ownable_init();
-        __ReentrancyGuard_init();
-
-        uint256 routerLength = _routers.length;
-        for (uint256 i; i < routerLength; ) {
-            if (_routers[i] == address(0)) {
-                revert ZeroAddress();
-            }
-            availableDex.add(_routers[i]);
-            unchecked {
-                ++i;
-            }
-        }
+    function initialize(
+        address[] memory _routers,
+        address[] memory _tokens,
+        uint256[] memory _minTokenAmounts,
+        uint256[] memory _maxTokenAmounts
+    ) external initializer {
+        __BridgeBaseInit(0, 0, _routers, _tokens, _minTokenAmounts, _maxTokenAmounts);
     }
 
     function dexCall(
@@ -60,107 +63,163 @@ contract InstantProxy is OwnableUpgradeable, PausableUpgradeable, ReentrancyGuar
         address _tokenIn,
         uint256 _amountIn,
         address _tokenOut,
+        address _recipient,
         bytes calldata _data
-    ) external payable nonReentrant whenNotPaused {
-        if (!availableDex.contains(_dex)) {
+    ) external nonReentrant whenNotPaused onlyWithoutFees {
+        if (!availableRouters.contains(_dex)) {
             revert DexNotAvailable();
         }
-        if (_tokenIn != address(0)) {
-            IERC20Upgradeable(_tokenIn).safeTransferFrom(msg.sender, address(this), _amountIn);
-            SafeERC20Upgradeable.safeApprove(IERC20Upgradeable(_tokenIn), _dex, _amountIn);
+
+        uint256 tokenInAfter;
+        (_amountIn, tokenInAfter) = _checkAmountIn(_tokenIn, _amountIn);
+
+        SafeERC20Upgradeable.safeIncreaseAllowance(IERC20Upgradeable(_tokenIn), _dex, _amountIn);
+
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(_tokenOut, _dex, _data, 0);
+
+        if (tokenInAfter - IERC20Upgradeable(_tokenIn).balanceOf(address(this)) != _amountIn) {
+            revert DifferentAmountSpent();
         }
 
-        // perform swap directly to user
-        AddressUpgradeable.functionCallWithValue(_dex, _data, msg.value);
+        // send tokens to user in case router doesn't support receiver address
+        if (tokenOutBefore != tokenOutAfter) {
+            sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
+        }
 
-        emit DexSwap(_dex, msg.sender, _tokenIn, _amountIn, _tokenOut);
+        // reset allowance back to zero, just in case
+        if (IERC20Upgradeable(_tokenIn).allowance(address(this), _dex) > 0) {
+            IERC20Upgradeable(_tokenIn).safeApprove(_dex, 0);
+        }
+
+        emit DexSwap(_dex, _recipient, _tokenIn, _amountIn, _tokenOut);
     }
 
-    function dexCallWithReceiver(
+    function dexCallNative(
         address _dex,
-        address _receiver,
         address _tokenIn,
         uint256 _amountIn,
         address _tokenOut,
+        address _recipient,
         bytes calldata _data
-    ) external payable nonReentrant whenNotPaused {
-        if (!availableDex.contains(_dex)) {
+    ) external payable nonReentrant whenNotPaused onlyWithoutFees {
+        if (!availableRouters.contains(_dex)) {
             revert DexNotAvailable();
         }
-        if (_tokenIn != address(0)) {
-            IERC20Upgradeable(_tokenIn).transferFrom(msg.sender, address(this), _amountIn);
-            SafeERC20Upgradeable.safeApprove(IERC20Upgradeable(_tokenIn), _dex, _amountIn);
+
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(_tokenOut, _dex, _data, msg.value);
+
+        // no need to check for different amount spent since we called router with all value
+
+        // send tokens to user in case router doesn't support receiver address
+        if (tokenOutAfter != tokenOutBefore) {
+            sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
         }
 
-        uint256 balanceBefore = IERC20Upgradeable(_tokenOut).balanceOf(address(this));
-
-        // perform swap to contract
-        AddressUpgradeable.functionCallWithValue(_dex, _data, msg.value);
-
-        sendToken(_tokenOut, IERC20Upgradeable(_tokenOut).balanceOf(address(this)) - balanceBefore, _receiver);
-
-        emit DexSwap(_dex, _receiver, _tokenIn, _amountIn, _tokenOut);
+        emit DexSwap(_dex, _recipient, _tokenIn, _amountIn, _tokenOut);
     }
 
-    function sweepTokens(address _token, uint256 _amount) external onlyOwner {
+    function dexCallWithFee(
+        address _dex,
+        address _tokenIn,
+        uint256 _amountIn,
+        address _tokenOut,
+        address _recipient,
+        address _integrator,
+        bytes calldata _data
+    ) external payable nonReentrant whenNotPaused {
+        if (!availableRouters.contains(_dex)) {
+            revert DexNotAvailable();
+        }
+        IntegratorFeeInfo memory _info = integratorToFeeInfo[_integrator];
+
+        uint256 tokenInAfter;
+        (_amountIn, tokenInAfter) = _checkAmountIn(_tokenIn, _amountIn);
+
+        _amountIn = accrueTokenFees(_integrator, _info, _amountIn, 0, _integrator);
+
+        // approve for received amountIn - fees
+        SafeERC20Upgradeable.safeIncreaseAllowance(IERC20Upgradeable(_tokenIn), _dex, _amountIn);
+
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(
+            _tokenOut,
+            _dex,
+            _data,
+            accrueFixedCryptoFee(_integrator, _info)
+        );
+
+        if (tokenInAfter - IERC20Upgradeable(_tokenIn).balanceOf(address(this)) != _amountIn) {
+            revert DifferentAmountSpent();
+        }
+
+        if (tokenOutAfter != tokenOutBefore) {
+            sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
+        }
+
+        // reset allowance back to zero, just in case
+        if (IERC20Upgradeable(_tokenIn).allowance(address(this), _dex) > 0) {
+            IERC20Upgradeable(_tokenIn).safeApprove(_dex, 0);
+        }
+
+        emit DexSwap(_dex, _recipient, _tokenIn, _amountIn, _tokenOut);
+    }
+
+    function dexCallNativeWithFee(
+        address _dex,
+        address _tokenIn,
+        uint256 _amountIn,
+        address _tokenOut,
+        address _recipient,
+        address _integrator,
+        bytes calldata _data
+    ) external payable nonReentrant whenNotPaused {
+        if (!availableRouters.contains(_dex)) {
+            revert DexNotAvailable();
+        }
+        IntegratorFeeInfo memory _info = integratorToFeeInfo[_integrator];
+
+        (uint256 tokenOutBefore, uint256 tokenOutAfter) = _performCallAndChecks(
+            _tokenOut,
+            _dex,
+            _data,
+            accrueFixedCryptoFee(_integrator, _info)
+        );
+
+        // no need to check for different amount spent since we called router with all value
+
+        // send tokens to user in case router doesn't support receiver address
+        if (tokenOutAfter != tokenOutBefore) {
+            sendToken(_tokenOut, tokenOutAfter - tokenOutBefore, _recipient);
+        }
+
+        emit DexSwap(_dex, _recipient, _tokenIn, _amountIn, _tokenOut);
+    }
+
+    function _checkAmountIn(address _tokenIn, uint256 _amountIn) internal returns (uint256, uint256) {
+        uint256 balanceBeforeTransfer = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
+        IERC20Upgradeable(_tokenIn).safeTransferFrom(msg.sender, address(this), _amountIn);
+        uint256 balanceAfterTransfer = IERC20Upgradeable(_tokenIn).balanceOf(address(this));
+        _amountIn = balanceAfterTransfer - balanceBeforeTransfer;
+        return (_amountIn, balanceAfterTransfer);
+    }
+
+    function _performCallAndChecks(
+        address _tokenOut,
+        address _dex,
+        bytes calldata _data,
+        uint256 _value
+    ) internal returns (uint256 balanceBeforeSwap, uint256 balanceAfterSwap) {
+        _tokenOut == address(0) ? balanceBeforeSwap = address(this).balance : balanceBeforeSwap = IERC20Upgradeable(
+            _tokenOut
+        ).balanceOf(address(this));
+
+        AddressUpgradeable.functionCallWithValue(_dex, _data, _value);
+
+        _tokenOut == address(0) ? balanceAfterSwap = address(this).balance : balanceAfterSwap = IERC20Upgradeable(
+            _tokenOut
+        ).balanceOf(address(this));
+    }
+
+    function sweepTokens(address _token, uint256 _amount) external onlyAdmin {
         sendToken(_token, _amount, msg.sender);
     }
-
-    function pauseExecution() external onlyOwner {
-        _pause();
-    }
-
-    function unpauseExecution() external onlyOwner {
-        _unpause();
-    }
-
-    /**
-     * @dev Appends new available DEX
-     * @param _dex DEX's address to add
-     */
-    function addAvailableDex(address _dex) external onlyOwner {
-        if (_dex == address(0)) {
-            revert ZeroAddress();
-        }
-        // Check that router exists is performed inside the library
-        availableDex.add(_dex);
-    }
-
-    /**
-     * @dev Removes existing available DEX
-     * @param _dex DEX's address to remove
-     */
-    function removeAvailableDex(address _dex) external onlyOwner {
-        // Check that router exists is performed inside the library
-        availableDex.remove(_dex);
-    }
-
-    /**
-     * @return Available dexes
-     */
-    function getAvailableDexes() external view returns (address[] memory) {
-        return availableDex.values();
-    }
-
-    function sendToken(
-        address _token,
-        uint256 _amount,
-        address _receiver
-    ) internal {
-        if (_token == address(0)) {
-            AddressUpgradeable.sendValue(payable(_receiver), _amount);
-        } else {
-            IERC20Upgradeable(_token).safeTransfer(_receiver, _amount);
-        }
-    }
-
-    /**
-     * @dev Plain fallback function to receive native
-     */
-    receive() external payable {}
-
-    /**
-     * @dev Plain fallback function
-     */
-    fallback() external {}
 }

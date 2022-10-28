@@ -7,3 +7,5 @@ node_modules
 .idea
 .openzeppelin
 .DS_Store
+coverage.json
+coverage
